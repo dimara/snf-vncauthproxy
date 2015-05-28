@@ -3,7 +3,7 @@
 vncauthproxy - a VNC authentication proxy
 """
 #
-# Copyright (c) 2010-2014 Greek Research and Technology Network S.A.
+# Copyright (c) 2010-2015 GRNET S.A. and individual contributors
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -85,6 +85,7 @@ import daemon.runner
 import crypt
 
 from vncauthproxy import rfb
+from vncauthproxy import d3des
 from vncauthproxy.websockets import (LoggedStream, LoggedStderr, VNCWS,
                                      VNCWebSocketWSGIApplication,
                                      VNCWSGIServer)
@@ -301,10 +302,25 @@ class VncAuthProxy(gevent.Greenlet):
             self.debug("Supported authentication types: %s",
                        " ".join([str(x) for x in types]))
 
-        if rfb.RFB_AUTHTYPE_NONE not in types:
-            raise InternalError("Error, server demands authentication")
+        if rfb.RFB_AUTHTYPE_NONE in types:
+            self.debug("RFB_AUTHTYPE_NONE requested by the server")
+            server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_NONE))
+        elif rfb.RFB_AUTHTYPE_VNC in types:
+            self.debug("RFB_AUTHTYPE_VNC requested by the server")
 
-        server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_NONE))
+            if not self.vnc_password:
+                raise InternalError("Authentication requested but no VNC"
+                                    " password is set."
+                                    " Use the '--vnc-password' option.")
+
+            # Read challenge
+            server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_VNC))
+            challenge = server.recv(16)
+            response = d3des.generate_response(self.vnc_password, challenge)
+            server.send(response)
+        else:
+            raise InternalError("Unsupported authentication method: %s", types)
+
 
         # Check authentication response
         res = server.recv(4)
@@ -839,6 +855,11 @@ def parse_arguments(args):
                       help=("Address to listen for client connections"
                             "(default: *)"))
 
+    parser.add_option('--vnc-password', dest="vnc_password",
+                      default=None,
+                      metavar='VNCPASSWORD',
+                      help=("Global VNC password to use (default: None)"))
+
     (opts, args) = parser.parse_args(args)
 
     if args:
@@ -874,6 +895,7 @@ def main():
         ports = range(opts.min_port, opts.max_port + 1)
 
         # Init VncAuthProxy class attributes
+        VncAuthProxy.vnc_password = opts.vnc_password
         VncAuthProxy.server_timeout = opts.server_timeout
         VncAuthProxy.connect_retries = opts.connect_retries
         VncAuthProxy.retry_wait = opts.retry_wait
