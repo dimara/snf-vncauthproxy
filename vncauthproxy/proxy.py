@@ -311,7 +311,7 @@ class VncAuthProxy(gevent.Greenlet):
             if not self.vnc_password:
                 raise InternalError("Authentication requested but no VNC"
                                     " password is set."
-                                    " Use the '--vnc-password' option.")
+                                    " Use the '--vnc-password-file' option.")
 
             # Read challenge
             server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_VNC))
@@ -771,6 +771,21 @@ def parse_auth_file(auth_file):
     return users
 
 
+def parse_vnc_password_file(vnc_password_file):
+    password = None
+    if vnc_password_file:
+        if os.path.isfile(vnc_password_file):
+            logger.debug("Using %s for VNC password file", vnc_password_file)
+            with open(vnc_password_file, "r") as f:
+                # Expect the password in the first line (ignoring next ones)
+                password = f.readline().strip()
+        else:
+            raise InternalError("Invalid VNC password file: %s."
+                                " File does not exist." % vnc_password_file)
+
+    return password
+
+
 def parse_arguments(args):
     from optparse import OptionParser
 
@@ -854,11 +869,11 @@ def parse_arguments(args):
                       metavar="PROXY_LISTEN_ADDRESS",
                       help=("Address to listen for client connections"
                             "(default: *)"))
-
-    parser.add_option('--vnc-password', dest="vnc_password",
+    parser.add_option('--vnc-password-file', dest="vnc_password_file",
                       default=None,
-                      metavar='VNCPASSWORD',
-                      help=("Global VNC password to use (default: None)"))
+                      metavar='VNC_PASSWORD_FILE',
+                      help=("File containing the global VNC password to use"
+                            " (default: None)"))
 
     (opts, args) = parser.parse_args(args)
 
@@ -895,7 +910,8 @@ def main():
         ports = range(opts.min_port, opts.max_port + 1)
 
         # Init VncAuthProxy class attributes
-        VncAuthProxy.vnc_password = opts.vnc_password
+        VncAuthProxy.vnc_password = \
+            parse_vnc_password_file(opts.vnc_password_file)
         VncAuthProxy.server_timeout = opts.server_timeout
         VncAuthProxy.connect_retries = opts.connect_retries
         VncAuthProxy.retry_wait = opts.retry_wait
