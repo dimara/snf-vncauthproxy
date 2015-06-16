@@ -181,13 +181,24 @@ secure WebSocket (``vnc-wss``) console type. Otherwise, any ``vnc-wss`` request
 will fail.
 
 By default the vncauthproxy daemon expects VNC servers at the backend to require
-no authentication. Alternatively it can authenticate using simple VNC
-password-based authentication. Note that vncauthproxy can only use the same
-password across all VNC servers that require authentication. The expected
-password should exist in a file which can be specified with the
-``--vnc-password-file`` option. The password file should contain the password in
-a single line. Of course this file will be ignored for servers that do not
-require authentication at all.
+no authentication. Alternatively, it can authenticate using simple VNC
+password-based authentication. If the server requires password authentication,
+vncauthproxy will try to connect using available passwords in the order
+found in the password file, until a valid handshake is achieved.
+
+The expected passwords should exist in a file which is specified with the
+``--vnc-password-file`` option. The password file can contain multiple
+passwords, each in a separate line. It can also include comments as lines
+starting with '#'.
+
+Mutliple passwords are useful in case you want to migrate an existing deployment
+to a new VNC password gradually. In this case you must prepend the new password
+in the VNC password file so it contains both the old and the new password, and
+restart vncauthproxy. This will allow vncauthproxy to authenticate against
+servers which still use the old password. You can remove the old password when
+all servers require the same password. Note that passwords are tried in
+the order found in the password file and thus it makes sense to list passwords
+from newest to oldest.
 
 For detailed help on its configuration parameters, either consult its man page
 or run:

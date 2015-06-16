@@ -116,6 +116,11 @@ class InternalError(Exception):
     pass
 
 
+class AuthenticationError(InternalError):
+    """Exception for VNC authentication error"""
+    pass
+
+
 # Currently, gevent uses libevent-dns for asynchronous DNS resolution,
 # which opens a socket upon initialization time. Since we can't get the fd
 # reliably, We have to maintain all file descriptors open (which won't harm
@@ -239,6 +244,21 @@ class VncAuthProxy(gevent.Greenlet):
 
     def _perform_server_handshake(self):
         """
+        Retry server handshake for all possible VNC passwords
+
+        """
+        # First try for all given passwords
+        for idx, password in enumerate(self.vnc_passwords):
+            try:
+              return self._try_server_handshake(password, idx)
+            except AuthenticationError:
+              pass
+        # ..and if no passwords are given, try once without password
+        else:
+              return self._try_server_handshake()
+
+    def _try_server_handshake(self, vnc_password=None, vnc_password_idx=None):
+        """
         Initiate a connection with the backend server and perform basic
         RFB 3.8 handshake with it.
 
@@ -286,6 +306,8 @@ class VncAuthProxy(gevent.Greenlet):
         if server is None:
             raise InternalError("Failed to connect to server")
 
+        self.debug("Trying authentication with the VNC server")
+
         version = server.recv(1024)
         if not rfb.check_version(version):
             raise InternalError("Unsupported RFB version: %s"
@@ -303,20 +325,25 @@ class VncAuthProxy(gevent.Greenlet):
                        " ".join([str(x) for x in types]))
 
         if rfb.RFB_AUTHTYPE_NONE in types:
-            self.debug("RFB_AUTHTYPE_NONE requested by the server")
+            self.debug("No authentication requested by the server")
             server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_NONE))
         elif rfb.RFB_AUTHTYPE_VNC in types:
-            self.debug("RFB_AUTHTYPE_VNC requested by the server")
+            self.debug("Password authentication requested by the server")
 
-            if not self.vnc_password:
-                raise InternalError("Authentication requested but no VNC"
-                                    " password is set."
-                                    " Use the '--vnc-password-file' option.")
+            if not self.vnc_password_file:
+                raise InternalError("Password authentication requested but"
+                                    " no passwords are available"
+                                    " (check '--vnc-password-file' option)")
 
+            if not vnc_password:
+                raise InternalError("Password authentication requested but"
+                                    " no valid VNC password found")
+
+            self.debug("Using password no. %s", vnc_password_idx)
             # Read challenge
             server.send(rfb.to_u8(rfb.RFB_AUTHTYPE_VNC))
             challenge = server.recv(16)
-            response = d3des.generate_response(self.vnc_password, challenge)
+            response = d3des.generate_response(vnc_password, challenge)
             server.send(response)
         else:
             raise InternalError("Unsupported authentication method: %s", types)
@@ -327,7 +354,10 @@ class VncAuthProxy(gevent.Greenlet):
         res = rfb.from_u32(res)
 
         if res != 0:
-            raise InternalError("Authentication error")
+            self.debug("Authentication failed")
+            raise AuthenticationError("Authentication failed")
+
+        self.debug("Authentication succeeded")
 
         # Reset the timeout for the rest of the session
         server.settimeout(None)
@@ -772,18 +802,26 @@ def parse_auth_file(auth_file):
 
 
 def parse_vnc_password_file(vnc_password_file):
-    password = None
+    """Parse multiline password file with comments"""
+    passwords = []
     if vnc_password_file:
         if os.path.isfile(vnc_password_file):
             logger.debug("Using %s for VNC password file", vnc_password_file)
             with open(vnc_password_file, "r") as f:
-                # Expect the password in the first line (ignoring next ones)
-                password = f.readline().strip()
+                for line in f.readlines():
+                    # Ignore comments and empty lines
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    passwords.append(line.strip())
         else:
             raise InternalError("Invalid VNC password file: %s."
                                 " File does not exist." % vnc_password_file)
 
-    return password
+        logger.debug("Found %s passwords in %s", len(passwords), vnc_password_file)
+    else:
+        logger.debug("Not using a VNC password file")
+
+    return passwords
 
 
 def parse_arguments(args):
@@ -910,7 +948,8 @@ def main():
         ports = range(opts.min_port, opts.max_port + 1)
 
         # Init VncAuthProxy class attributes
-        VncAuthProxy.vnc_password = \
+        VncAuthProxy.vnc_password_file = opts.vnc_password_file
+        VncAuthProxy.vnc_passwords = \
             parse_vnc_password_file(opts.vnc_password_file)
         VncAuthProxy.server_timeout = opts.server_timeout
         VncAuthProxy.connect_retries = opts.connect_retries
